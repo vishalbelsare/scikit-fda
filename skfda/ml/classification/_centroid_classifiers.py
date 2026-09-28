@@ -1,27 +1,30 @@
 """Centroid-based models for supervised classification."""
 from __future__ import annotations
 
-from typing import Callable, Generic, Optional, TypeVar
+from typing import Callable, TypeVar, Union
 
-from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.utils.validation import check_is_fitted as sklearn_check_is_fitted
+from sklearn.utils.validation import check_is_fitted
 
 from ..._utils import _classifier_get_classes
+from ..._utils._sklearn_adapter import BaseEstimator, ClassifierMixin
 from ...exploratory.depth import Depth, ModifiedBandDepth
 from ...exploratory.stats import mean, trim_mean
-from ...misc.metrics import Metric, PairwiseMetric, l2_distance
+from ...misc.metrics import PairwiseMetric, l2_distance
+from ...misc.metrics._utils import _fit_metric
 from ...representation import FData
-from ...representation._typing import NDArrayInt
+from ...typing._metric import Metric
+from ...typing._numpy import NDArrayInt, NDArrayStr
 
-T = TypeVar("T", bound=FData)
+Input = TypeVar("Input", bound=FData)
+Target = TypeVar("Target", bound=Union[NDArrayInt, NDArrayStr])
 
 
 class NearestCentroid(
-    BaseEstimator,  # type: ignore
-    ClassifierMixin,  # type: ignore
-    Generic[T],
+    ClassifierMixin[Input, Target],
+    BaseEstimator,
 ):
-    """Nearest centroid classifier for functional data.
+    """
+    Nearest centroid classifier for functional data.
 
     Each class is represented by its centroid, with test samples classified to
     the class with the nearest centroid.
@@ -60,7 +63,7 @@ class NearestCentroid(
         We can predict the class of new samples
 
         >>> neigh.predict(fd[::2]) # Predict labels for even samples
-        array([0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1])
+        array([ 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1])
 
     See also:
         :class:`~skfda.ml.classification.DTMClassifier`
@@ -68,13 +71,13 @@ class NearestCentroid(
 
     def __init__(
         self,
-        metric: Metric[T] = l2_distance,
-        centroid: Callable[[T], T] = mean,
+        metric: Metric[Input] = l2_distance,
+        centroid: Callable[[Input], Input] = mean,
     ):
         self.metric = metric
         self.centroid = centroid
 
-    def fit(self, X: T, y: NDArrayInt) -> NearestCentroid[T]:
+    def fit(self, X: Input, y: Target) -> NearestCentroid[Input, Target]:
         """Fit the model using X as training data and y as target values.
 
         Args:
@@ -86,18 +89,20 @@ class NearestCentroid(
         Returns:
             self
         """
+        _fit_metric(self.metric, X)
+
         classes, y_ind = _classifier_get_classes(y)
 
-        self._classes = classes
+        self.classes_ = classes
         self.centroids_ = self.centroid(X[y_ind == 0])
 
-        for cur_class in range(1, self._classes.size):
+        for cur_class in range(1, self.classes_.size):
             centroid = self.centroid(X[y_ind == cur_class])
             self.centroids_ = self.centroids_.concatenate(centroid)
 
         return self
 
-    def predict(self, X: T) -> NDArrayInt:
+    def predict(self, X: Input) -> Target:
         """Predict the class labels for the provided data.
 
         Args:
@@ -107,21 +112,22 @@ class NearestCentroid(
             Array of shape (n_samples) or
                 (n_samples, n_outputs) with class labels for each data sample.
         """
-        sklearn_check_is_fitted(self)
+        check_is_fitted(self)
 
-        return self._classes[PairwiseMetric(self.metric)(
-            X,
-            self.centroids_,
-        ).argmin(axis=1)
+        return self.classes_[  # type: ignore[no-any-return]
+            PairwiseMetric(self.metric)(
+                X,
+                self.centroids_,
+            ).argmin(axis=1)
         ]
 
 
-class DTMClassifier(NearestCentroid[T]):
+class DTMClassifier(NearestCentroid[Input, Target]):
     """Distance to trimmed means (DTM) classification.
 
     Test samples are classified to the class that minimizes the distance of
     the observation to the trimmed mean of the group
-    :footcite:`fraiman+muniz_2001_trimmed`.
+    :footcite:`pintado+romo_2005_depthbased`.
 
     Parameters:
         proportiontocut:
@@ -158,7 +164,7 @@ class DTMClassifier(NearestCentroid[T]):
         We can predict the class of new samples
 
         >>> clf.predict(X_test) # Predict labels for test samples
-        array([1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1,
+        array([ 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1,
                 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 1, 1])
 
         Finally, we calculate the mean accuracy for the test data
@@ -168,6 +174,7 @@ class DTMClassifier(NearestCentroid[T]):
 
     See also:
         :class:`~skfda.ml.classification.NearestCentroid`
+        :class:`~skfda.exploratory.stats.trim_mean`
 
     References:
         .. footbibliography::
@@ -177,8 +184,8 @@ class DTMClassifier(NearestCentroid[T]):
     def __init__(
         self,
         proportiontocut: float,
-        depth_method: Optional[Depth[T]] = None,
-        metric: Metric[T] = l2_distance,
+        depth_method: Depth[Input] | None = None,
+        metric: Metric[Input] = l2_distance,
     ) -> None:
         self.proportiontocut = proportiontocut
         self.depth_method = depth_method
@@ -188,7 +195,7 @@ class DTMClassifier(NearestCentroid[T]):
             centroid=self._centroid,
         )
 
-    def _centroid(self, fdatagrid: T) -> T:
+    def _centroid(self, fdatagrid: Input) -> Input:
         if self.depth_method is None:
             self.depth_method = ModifiedBandDepth()
 

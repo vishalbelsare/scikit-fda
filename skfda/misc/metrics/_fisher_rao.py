@@ -1,6 +1,7 @@
 """Elastic metrics."""
+from __future__ import annotations
 
-from typing import Any, Optional, Tuple, TypeVar, Union
+from typing import Any, Optional, Tuple, TypeVar
 
 import numpy as np
 import scipy.integrate
@@ -8,7 +9,7 @@ from typing_extensions import Final
 
 from ..._utils import normalize_scale, normalize_warping
 from ...representation import FData, FDataGrid
-from ...representation._typing import NDArrayFloat
+from ...typing._numpy import NDArrayFloat
 from ..operators import SRSF
 from ._lp_distances import l2_distance
 from ._utils import PairwiseMetric, _cast_to_grid, pairwise_metric_optimization
@@ -20,7 +21,7 @@ def _transformation_for_fisher_rao(
     fdata1: T,
     fdata2: T,
     *,
-    eval_points: Optional[NDArrayFloat] = None,
+    eval_points: NDArrayFloat | None = None,
     _check: bool = True,
 ) -> Tuple[FDataGrid, FDataGrid]:
     fdata1, fdata2 = _cast_to_grid(
@@ -60,12 +61,12 @@ class FisherRaoDistance():
 
     .. math::
         d_{FR}(f_i, f_j) = \| q_i - q_j \|_2 =
-        \left ( \int_0^1 sgn(\dot{f_i}(t))\sqrt{|\dot{f_i}(t)|} -
-        sgn(\dot{f_j}(t))\sqrt{|\dot{f_j}(t)|} dt \right )^{\frac{1}{2}}
+        \left ( \int_0^1 sgn(f_i'(t))\sqrt{|f_i'(t)|} -
+        sgn(f_j'(t))\sqrt{|f_j'(t)|} dt \right )^{\frac{1}{2}}
 
     If the observations are distributions of random variables the distance will
     match with the usual Fisher-Rao distance in non-parametric form for
-    probability distributions :footcite:`srivastava++_2011_ficher-rao`.
+    probability distributions :footcite:`srivastava++_2011_registration`.
 
     If the observations are defined in a :term:`domain` different than (0,1)
     their domains are normalized to this interval with an affine
@@ -92,7 +93,7 @@ class FisherRaoDistance():
         fdata1: T,
         fdata2: T,
         *,
-        eval_points: Optional[NDArrayFloat] = None,
+        eval_points: NDArrayFloat | None = None,
         _check: bool = True,
     ) -> NDArrayFloat:
         """Compute the distance."""
@@ -137,7 +138,7 @@ def fisher_rao_amplitude_distance(
     fdata2: T,
     *,
     lam: float = 0,
-    eval_points: Optional[NDArrayFloat] = None,
+    eval_points: NDArrayFloat | None = None,
     _check: bool = True,
     **kwargs: Any,
 ) -> NDArrayFloat:
@@ -163,10 +164,10 @@ def fisher_rao_amplitude_distance(
     given by
 
     .. math::
-        \mathcal{R}(\gamma) = \|\sqrt{\dot{\gamma}}- 1 \|_{\mathbb{L}^2}^2
+        \mathcal{R}(\gamma) = \|\sqrt{\gamma'}- 1 \|_{\mathbb{L}^2}^2
 
-    See the :footcite:`srivastava+klassen_2016_analysis_amplitude` for a
-    detailed explanation.
+    See Srivastava and Klassen (chapter 4)\ 
+    :footcite:p:`srivastava+klassen_2016` for a detailed explanation.
 
     If the observations are defined in a :term:`domain` different than (0,1)
     their domains are normalized to this interval with an affine
@@ -233,7 +234,7 @@ def fisher_rao_amplitude_distance(
         penalty = np.sqrt(penalty, out=penalty)
         penalty -= 1
         penalty = np.square(penalty, out=penalty)
-        penalty = scipy.integrate.simps(penalty, x=eval_points_normalized)
+        penalty = scipy.integrate.simpson(penalty, x=eval_points_normalized)
 
         distance = np.sqrt(distance**2 + lam * penalty)
 
@@ -245,7 +246,7 @@ def fisher_rao_phase_distance(
     fdata2: T,
     *,
     lam: float = 0,
-    eval_points: Optional[NDArrayFloat] = None,
+    eval_points: NDArrayFloat | None = None,
     _check: bool = True,
 ) -> NDArrayFloat:
     r"""
@@ -259,12 +260,12 @@ def fisher_rao_phase_distance(
 
     .. math::
         d_{P}(f_i, f_j) = d_{FR}(\gamma_{ij}, \gamma_{id}) =
-        arcos \left ( \int_0^1 \sqrt {\dot \gamma_{ij}(t)} dt \right )
+        arcos \left ( \int_0^1 \sqrt {\gamma_{ij}'(t)} dt \right )
 
     where :math:`\gamma_{id}` is the identity warping.
 
-    See :footcite:`srivastava+klassen_2016_analysis_phase` for a detailed
-    explanation.
+    See Srivastava and Klassen (chapter 4)\ 
+    :footcite:p:`srivastava+klassen_2016` for a detailed explanation.
 
     If the observations are defined in a :term:`domain` different than (0,1)
     their domains are normalized to this interval with an affine
@@ -321,17 +322,17 @@ def fisher_rao_phase_distance(
 
     derivative_warping = np.sqrt(derivative_warping, out=derivative_warping)
 
-    d = scipy.integrate.simps(derivative_warping, x=eval_points_normalized)
+    d = scipy.integrate.simpson(derivative_warping, x=eval_points_normalized)
     d = np.clip(d, -1, 1)
 
-    return np.arccos(d)
+    return np.arccos(d)  # type: ignore[no-any-return]
 
 
 def _fisher_rao_warping_distance(
     warping1: T,
     warping2: T,
     *,
-    eval_points: Optional[NDArrayFloat] = None,
+    eval_points: NDArrayFloat | None = None,
     _check: bool = True,
 ) -> NDArrayFloat:
     r"""
@@ -345,10 +346,10 @@ def _fisher_rao_warping_distance(
 
     .. math::
         d_{\Gamma}(\gamma_i, \gamma_j) = cos^{-1} \left ( \int_0^1
-        \sqrt{\dot \gamma_i(t)\dot \gamma_j(t)}dt \right )
+        \sqrt{\gamma_i'(t)\gamma_j'(t)}dt \right )
 
-    See :footcite:`srivastava+klassen_2016_analysis_probability` for a detailed
-    explanation.
+    See Srivastava and Klassen (chapter 4)\ 
+    :footcite:p:`srivastava+klassen_2016` for a detailed explanation.
 
     If the warpings are not defined in [0,1], an affine transformation is made
     to change the :term:`domain`.
@@ -393,7 +394,7 @@ def _fisher_rao_warping_distance(
 
     product = np.multiply(srsf_warping1, srsf_warping2, out=srsf_warping1)
 
-    d = scipy.integrate.simps(product, x=warping1.grid_points[0])
+    d = scipy.integrate.simpson(product, x=warping1.grid_points[0])
     d = np.clip(d, -1, 1)
 
-    return np.arccos(d)
+    return np.arccos(d)  # type: ignore[no-any-return]

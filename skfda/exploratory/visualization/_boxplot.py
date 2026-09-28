@@ -8,20 +8,18 @@ from __future__ import annotations
 
 import math
 from abc import abstractmethod
-from typing import Optional, Sequence, Tuple, Union
+from typing import Sequence, Tuple
 
 import matplotlib
-import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.colors import Colormap
 from matplotlib.figure import Figure
 
 from skfda.exploratory.depth.multivariate import Depth
 
-from ... import FData, FDataGrid
-from ...representation._typing import NDArrayBool, NDArrayFloat
+from ...representation import FData, FDataGrid
+from ...typing._numpy import NDArrayBool, NDArrayFloat
 from ..depth import ModifiedBandDepth
 from ..outliers import _envelopes
 from ._baseplot import BasePlot
@@ -45,13 +43,13 @@ class FDataBoxplot(BasePlot):
     @abstractmethod
     def __init__(
         self,
-        chart: Union[Figure, Axes, None] = None,
+        chart: Figure | Axes | None = None,
         *,
         factor: float = 1.5,
-        fig: Optional[Figure] = None,
-        axes: Optional[Axes] = None,
-        n_rows: Optional[int] = None,
-        n_cols: Optional[int] = None,
+        fig: Figure | None = None,
+        axes: Axes | None = None,
+        n_rows: int | None = None,
+        n_cols: int | None = None,
     ) -> None:
         if factor < 0:
             raise ValueError(
@@ -118,7 +116,7 @@ class Boxplot(FDataBoxplot):
     detected in a functional boxplot by the 1.5 times the 50% central region
     empirical rule, analogous to the rule for classical boxplots.
 
-    For more information see :footcite:ts:`sun+genton_2011_boxplots`.
+    For more information see :footcite:ts:`sun+genton_2011_functional`.
 
     Args:
         fdatagrid: Object containing the data.
@@ -269,15 +267,15 @@ class Boxplot(FDataBoxplot):
     def __init__(
         self,
         fdatagrid: FData,
-        chart: Union[Figure, Axes, None] = None,
+        chart: Figure | Axes | None = None,
         *,
-        depth_method: Optional[Depth[FDataGrid]] = None,
+        depth_method: Depth[FDataGrid] | None = None,
         prob: Sequence[float] = (0.5,),
         factor: float = 1.5,
-        fig: Optional[Figure] = None,
-        axes: Optional[Axes] = None,
-        n_rows: Optional[int] = None,
-        n_cols: Optional[int] = None,
+        fig: Figure | None = None,
+        axes: Axes | None = None,
+        n_rows: int | None = None,
+        n_cols: int | None = None,
     ):
         """Initialize the Boxplot class.
 
@@ -377,7 +375,7 @@ class Boxplot(FDataBoxplot):
 
         self._fdatagrid = fdatagrid
         self._prob = prob
-        self._colormap = plt.cm.get_cmap('RdPu')
+        self._colormap = matplotlib.colormaps['RdPu']
         self.barcol = "blue"
         self.outliercol = "red"
         self.mediancol = "black"
@@ -389,7 +387,7 @@ class Boxplot(FDataBoxplot):
 
     @property
     def median(self) -> NDArrayFloat:
-        return self._median
+        return self._median  # type: ignore[no-any-return]
 
     @property
     def central_envelope(self) -> Tuple[NDArrayFloat, NDArrayFloat]:
@@ -539,7 +537,7 @@ class SurfaceBoxplot(FDataBoxplot):
     :ref:`depth measure <depth-measures>`
     for functional data, it represents the envelope of the
     50% central region, the median curve, and the maximum non-outlying
-    envelope :footcite:`sun+genton_2011_boxplots`.
+    envelope :footcite:`sun+genton_2011_functional`.
 
     Args:
         fdatagrid: Object containing the data.
@@ -648,14 +646,14 @@ class SurfaceBoxplot(FDataBoxplot):
     def __init__(
         self,
         fdatagrid: FDataGrid,
-        chart: Union[Figure, Axes, None] = None,
+        chart: Figure | Axes | None = None,
         *,
-        depth_method: Optional[Depth[FDataGrid]] = None,
+        depth_method: Depth[FDataGrid] | None = None,
         factor: float = 1.5,
-        fig: Optional[Figure] = None,
-        axes: Optional[Axes] = None,
-        n_rows: Optional[int] = None,
-        n_cols: Optional[int] = None,
+        fig: Figure | None = None,
+        axes: Axes | None = None,
+        n_rows: int | None = None,
+        n_cols: int | None = None,
     ) -> None:
 
         super().__init__(
@@ -702,7 +700,7 @@ class SurfaceBoxplot(FDataBoxplot):
         self._non_outlying_envelope = _envelopes.compute_envelope(inliers)
 
         self._fdatagrid = fdatagrid
-        self.colormap = plt.cm.get_cmap('Greys')
+        self.colormap = matplotlib.colormaps['Greys']
         self._boxcol = 1.0
         self._outcol = 0.7
 
@@ -712,7 +710,7 @@ class SurfaceBoxplot(FDataBoxplot):
 
     @property
     def median(self) -> NDArrayFloat:
-        return self._median
+        return self._median  # type: ignore[no-any-return]
 
     @property
     def central_envelope(self) -> Tuple[NDArrayFloat, NDArrayFloat]:

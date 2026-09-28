@@ -8,13 +8,20 @@ from the center (larger values) outwards(smaller ones).
 from __future__ import annotations
 
 import itertools
-from typing import Optional
+from typing import TypeVar
 
 import numpy as np
-import scipy.integrate
 
-from ... import FDataGrid
+from ..._utils._sklearn_adapter import BaseEstimator
+from ..._utils.ndfunction import average_function_value
+from ...misc.metrics import l2_distance
+from ...misc.metrics._utils import _fit_metric
+from ...representation import FData, FDataGrid
+from ...typing._metric import Metric
+from ...typing._numpy import NDArrayFloat
 from .multivariate import Depth, SimplicialDepth, _UnivariateFraimanMuniz
+
+T = TypeVar("T", bound=FData)
 
 
 class IntegratedDepth(Depth[FDataGrid]):
@@ -36,10 +43,10 @@ class IntegratedDepth(Depth[FDataGrid]):
         ...                [-1, -1, -0.5, 1, 1, 0.5],
         ...                [-0.5, -0.5, -0.5, -1, -1, -1]]
         >>> grid_points = [0, 2, 4, 6, 8, 10]
-        >>> fd = skfda.FDataGrid(data_matrix, grid_points)
+        >>> X = skfda.FDataGrid(data_matrix, grid_points)
         >>> depth = skfda.exploratory.depth.IntegratedDepth()
-        >>> depth(fd)
-        array([ 0.5  ,  0.75 ,  0.925,  0.875])
+        >>> depth(X).round(1)
+        array([ 0.5,  0.8,  0.9,  0.9])
 
     References:
         Fraiman, R., & Muniz, G. (2001). Trimmed means for functional
@@ -51,17 +58,17 @@ class IntegratedDepth(Depth[FDataGrid]):
     def __init__(
         self,
         *,
-        multivariate_depth: Optional[Depth[np.ndarray]] = None,
+        multivariate_depth: Depth[NDArrayFloat] | None = None,
     ) -> None:
         self.multivariate_depth = multivariate_depth
 
     def fit(  # noqa: D102
         self,
         X: FDataGrid,
-        y: None = None,
+        y: object = None,
     ) -> IntegratedDepth:
 
-        self.multivariate_depth_: Depth[np.ndarray]
+        self.multivariate_depth_: Depth[NDArrayFloat]
 
         if self.multivariate_depth is None:
             self.multivariate_depth_ = _UnivariateFraimanMuniz()
@@ -73,37 +80,23 @@ class IntegratedDepth(Depth[FDataGrid]):
         self.multivariate_depth_.fit(X.data_matrix)
         return self
 
-    def transform(self, X: FDataGrid) -> np.ndarray:  # noqa: D102
+    def transform(self, X: FDataGrid) -> NDArrayFloat:  # noqa: D102
 
-        pointwise_depth = self.multivariate_depth_.transform(X.data_matrix)
-
-        interval_len = (
-            self._domain_range[0][1]
-            - self._domain_range[0][0]
+        pointwise_depth = X.copy(
+            data_matrix=self.multivariate_depth_.transform(X.data_matrix),
         )
 
-        integrand = pointwise_depth
+        return average_function_value(pointwise_depth).ravel()
 
-        for d, s in zip(X.domain_range, X.grid_points):
-            integrand = scipy.integrate.simps(
-                integrand,
-                x=s,
-                axis=1,
-            )
-            interval_len = d[1] - d[0]
-            integrand /= interval_len
-
-        return integrand
-
-    @property  # noqa: WPS125
-    def max(self) -> float:  # noqa: WPS125
+    @property
+    def max(self) -> float:
         if self.multivariate_depth is None:
             return 1
 
         return self.multivariate_depth.max
 
-    @property  # noqa: WPS125
-    def min(self) -> float:  # noqa: WPS125
+    @property
+    def min(self) -> float:
         if self.multivariate_depth is None:
             return 1 / 2
 
@@ -128,11 +121,11 @@ class ModifiedBandDepth(IntegratedDepth):
         ...                [-1, -1, -0.5, 1, 1, 0.5],
         ...                [-0.5, -0.5, -0.5, -1, -1, -1]]
         >>> grid_points = [0, 2, 4, 6, 8, 10]
-        >>> fd = skfda.FDataGrid(data_matrix, grid_points)
+        >>> X = skfda.FDataGrid(data_matrix, grid_points)
         >>> depth = skfda.exploratory.depth.ModifiedBandDepth()
-        >>> values = depth(fd)
-        >>> values.round(2)
-        array([ 0.5 ,  0.83,  0.73,  0.67])
+        >>> values = depth(X)
+        >>> values.round(1)
+        array([ 0.5,  0.8,  0.7,  0.7])
 
     References:
         López-Pintado, S., & Romo, J. (2009). On the Concept of
@@ -176,7 +169,7 @@ class BandDepth(Depth[FDataGrid]):
 
     """
 
-    def fit(self, X: FDataGrid, y: None = None) -> BandDepth:  # noqa: D102
+    def fit(self, X: FDataGrid, y: object = None) -> BandDepth:  # noqa: D102
 
         if X.dim_codomain != 1:
             raise NotImplementedError(
@@ -186,9 +179,9 @@ class BandDepth(Depth[FDataGrid]):
         self._distribution = X
         return self
 
-    def transform(self, X: FDataGrid) -> np.ndarray:  # noqa: D102
+    def transform(self, X: FDataGrid) -> NDArrayFloat:  # noqa: D102
 
-        num_in = 0
+        num_in = np.zeros(shape=len(X), dtype=X.data_matrix.dtype)
         n_total = 0
 
         for f1, f2 in itertools.combinations(self._distribution, 2):
@@ -211,3 +204,73 @@ class BandDepth(Depth[FDataGrid]):
             n_total += 1
 
         return num_in / n_total
+
+
+class DistanceBasedDepth(Depth[FDataGrid], BaseEstimator):
+    r"""
+    Functional depth based on a metric.
+
+    Parameters:
+        metric:
+            The metric to use as M in the following depth calculation
+
+            .. math::
+                D(x) = [1 + M(x, \mu)]^{-1}.
+
+            as explained in :footcite:`serfling+zuo_2000_general`.
+
+    Examples:
+        >>> import skfda
+        >>> from skfda.exploratory.depth import DistanceBasedDepth
+        >>> from skfda.misc.metrics import MahalanobisDistance
+        >>> data_matrix = [[1, 1, 2, 3, 2.5, 2],
+        ...                [0.5, 0.5, 1, 2, 1.5, 1],
+        ...                [-1, -1, -0.5, 1, 1, 0.5],
+        ...                [-0.5, -0.5, -0.5, -1, -1, -1]]
+        >>> grid_points = [0, 2, 4, 6, 8, 10]
+        >>> X = skfda.FDataGrid(data_matrix, grid_points)
+        >>> depth = DistanceBasedDepth(MahalanobisDistance(2))
+        >>> depth(X).round(1)
+        array([ 0.4,  0.8,  0.3,  0.3])
+
+    References:
+        .. footbibliography::
+    """
+
+    def __init__(
+        self,
+        metric: Metric[T] = l2_distance,
+    ) -> None:
+        self.metric = metric
+
+    def fit(  # noqa: D102
+        self,
+        X: T,
+        y: object = None,
+    ) -> DistanceBasedDepth:
+        """Fit the model using X as training data.
+
+        Args:
+            X: FDataGrid with the training data or array matrix with shape
+                (n_samples, n_samples) if metric='precomputed'.
+            y: Ignored.
+
+        Returns:
+            self
+        """
+        _fit_metric(self.metric, X)
+
+        self.mean_ = X.mean()
+
+        return self
+
+    def transform(self, X: T) -> NDArrayFloat:  # noqa: D102
+        """Compute the depth of given observations.
+
+        Args:
+            X: FDataGrid with the observations to use in the calculation.
+
+        Returns:
+            Array with the depths.
+        """
+        return 1 / (1 + self.metric(X, self.mean_))

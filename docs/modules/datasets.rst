@@ -11,14 +11,18 @@ The following functions are used to retrieve specific functional datasets:
 .. autosummary::
    :toctree: autosummary
 
+   skfda.datasets.fetch_aemet
+   skfda.datasets.fetch_gait
    skfda.datasets.fetch_growth
+   skfda.datasets.fetch_handwriting
+   skfda.datasets.fetch_mco
+   skfda.datasets.fetch_medflies
+   skfda.datasets.fetch_nox
+   skfda.datasets.fetch_octane
    skfda.datasets.fetch_phoneme
    skfda.datasets.fetch_tecator
-   skfda.datasets.fetch_medflies
    skfda.datasets.fetch_weather
-   skfda.datasets.fetch_aemet
-   skfda.datasets.fetch_octane
-   skfda.datasets.fetch_gait
+   skfda.datasets.fetch_bone_density
 
 Those functions return a dictionary with at least a "data" field containing the
 instance data, and a "target" field containing the class labels or regression values,
@@ -50,3 +54,4 @@ The following functions are used to make synthetic functional datasets:
    skfda.datasets.make_multimodal_samples
    skfda.datasets.make_multimodal_landmarks
    skfda.datasets.make_random_warping
+   skfda.datasets.make_sde_trajectories

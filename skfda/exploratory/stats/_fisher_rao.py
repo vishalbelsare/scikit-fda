@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import scipy.integrate
 from fdasrsf.utility_functions import optimum_reparam
 
-from ..._utils import check_is_univariate, invert_warping, normalize_scale
+from ..._utils import invert_warping, normalize_scale
 from ...misc.operators import SRSF
+from ...misc.validation import check_fdata_dimensions
 from ...representation import FDataGrid
-from ...representation._typing import NDArrayFloat
 from ...representation.interpolation import SplineInterpolation
+from ...typing._numpy import NDArrayFloat
 
 ###############################################################################
 # Based on the original implementation of J. Derek Tucker in                  #
@@ -45,7 +46,7 @@ def _elastic_alignment_array(
         the functions aligned to the template(s).
 
     """
-    return optimum_reparam(
+    return optimum_reparam(  # type: ignore[no-any-return]
         np.ascontiguousarray(template_data.T),
         np.ascontiguousarray(eval_points),
         np.ascontiguousarray(q_data.T),
@@ -71,8 +72,9 @@ def _fisher_rao_warping_mean(
     \gamma_i(b)=b`.
 
     The karcher mean :math:`\bar \gamma` is defined as the warping that
-    minimises locally the sum of Fisher-Rao squared distances
-    :footcite:`srivastava+klassen_2016_analysis_orbit`.
+    minimises locally the sum of Fisher-Rao squared distances.
+    See Srivastava and Klassen (chapter 8)\ 
+    :footcite:p:`srivastava+klassen_2016` for a detailed explanation.
 
     .. math::
         \bar \gamma = argmin_{\gamma \in \Gamma} \sum_{i=1}^{n}
@@ -80,7 +82,7 @@ def _fisher_rao_warping_mean(
 
     The computation is performed using the structure of Hilbert Sphere obtained
     after a transformation of the warpings, see
-    :footcite:`srivastava++_2011_ficher-rao_orbit`.
+    :footcite:`srivastava++_2011_registration`.
 
     Args:
         warping: Set of warpings.
@@ -132,7 +134,7 @@ def _fisher_rao_warping_mean(
         # Compute shooting vectors
         for psi_i in psi_data:
 
-            inner = scipy.integrate.simps(mu * psi_i, x=eval_points)
+            inner = scipy.integrate.simpson(mu * psi_i, x=eval_points)
             inner = max(min(inner, 1), -1)
 
             theta = np.arccos(inner)
@@ -142,7 +144,7 @@ def _fisher_rao_warping_mean(
 
         # Mean of shooting vectors
         vmean /= warping.n_samples
-        v_norm = np.sqrt(scipy.integrate.simps(np.square(vmean)))
+        v_norm = np.sqrt(scipy.integrate.simpson(np.square(vmean)))
 
         # Convergence criterion
         if v_norm < tol:
@@ -154,7 +156,7 @@ def _fisher_rao_warping_mean(
         mu = a * mu + b * vmean
 
     # Recover mean in original gamma space
-    warping_mean_ret = scipy.integrate.cumtrapz(
+    warping_mean_ret = scipy.integrate.cumulative_trapezoid(
         np.square(mu, out=mu)[0],
         x=eval_points,
         initial=0,
@@ -186,7 +188,7 @@ def fisher_rao_karcher_mean(
     center: bool = True,
     max_iter: int = 20,
     tol: float = 1e-3,
-    initial: Optional[float] = None,
+    initial: float | None = None,
     grid_dim: int = 7,
     **kwargs: Any,
 ) -> FDataGrid:
@@ -210,8 +212,9 @@ def fisher_rao_karcher_mean(
     equivalence class which makes the mean of the warpings employed be the
     identity.
 
-    See :footcite:`srivastava+klassen_2016_analysis_karcher` and
-    :footcite:`srivastava++_2011_ficher-rao_karcher`.
+    See Srivastava and Klassen (chapter 8)\ 
+    :footcite:p:`srivastava+klassen_2016` and 
+    :footcite:`srivastava++_2011_registration`.
 
     Args:
         fdatagrid: Set of functions to compute the
@@ -239,7 +242,11 @@ def fisher_rao_karcher_mean(
         .. footbibliography::
 
     """
-    check_is_univariate(fdatagrid)
+    check_fdata_dimensions(
+        fdatagrid,
+        dim_domain=1,
+        dim_codomain=1,
+    )
 
     srsf_transformer = SRSF(initial_value=0)
     fdatagrid_srsf = srsf_transformer.fit_transform(fdatagrid)
@@ -261,9 +268,9 @@ def fisher_rao_karcher_mean(
     # Initialize with function closest to the L2 mean with the L2 distance
     centered = (srsf.T - srsf.mean(axis=0, keepdims=True).T).T
 
-    distances = scipy.integrate.simps(
+    distances = scipy.integrate.simpson(
         np.square(centered, out=centered),
-        eval_points_normalized,
+        x=eval_points_normalized,
         axis=1,
     )
 
@@ -295,20 +302,20 @@ def fisher_rao_karcher_mean(
         ).data_matrix[..., 0]
 
         # Next iteration
-        mu_1 = srsf.mean(axis=0, out=mu_1)
+        mu_1 = srsf.mean(axis=0)
 
         # Convergence criterion
         mu_norm = np.sqrt(
-            scipy.integrate.simps(
+            scipy.integrate.simpson(
                 np.square(mu, out=mu_aux),
-                eval_points_normalized,
+                x=eval_points_normalized,
             ),
         )
 
         mu_diff = np.sqrt(
-            scipy.integrate.simps(
+            scipy.integrate.simpson(
                 np.square(mu - mu_1, out=mu_aux),
-                eval_points_normalized,
+                x=eval_points_normalized,
             ),
         )
 

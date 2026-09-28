@@ -14,12 +14,14 @@ import scipy.integrate
 
 from .._utils import _same_domain, nquad_vec
 from ..representation import FData, FDataBasis, FDataGrid
-from ..representation._typing import ArrayLike, DomainRange, NDArrayFloat
 from ..representation.basis import Basis
+from ..typing._base import DomainRange
+from ..typing._numpy import NDArrayFloat
+from .validation import check_fdata_same_dimensions
 
 Vector = TypeVar(
     "Vector",
-    bound=Union[NDArrayFloat, Basis, Callable[[ArrayLike], NDArrayFloat]],
+    bound=Union[NDArrayFloat, Basis, Callable[[NDArrayFloat], NDArrayFloat]],
 )
 
 
@@ -241,6 +243,7 @@ def inner_product(
     Args:
         arg1: First sample.
         arg2: Second sample.
+        kwargs: Additional parameters for the function.
 
     Returns:
         Vector with the inner products of each pair of samples.
@@ -254,18 +257,19 @@ def inner_product(
         >>> array1 = np.array([1, 2, 3])
         >>> array2 = np.array([4, 5, 6])
         >>> inner_product(array1, array2)
-        32
+        np.int64(32)
 
         If the arrays contain more than one sample
 
         >>> array1 = np.array([[1, 2, 3], [2, 3, 4]])
         >>> array2 = np.array([[4, 5, 6], [1, 1, 1]])
         >>> inner_product(array1, array2)
-        array([32, 9])
+        array([ 32, 9])
 
-        The inner product of the :math:'f(x) = x` and the constant
-        :math:`y=1` defined over the interval [0,1] is the area of the
-        triangle delimited by the the lines y = 0, x = 1 and y = x; 0.5.
+        The inner product of the :math:`f(x) = x` and the constant
+        :math:`y=1` defined over the interval :math:`[0,1]` is the area of
+        the triangle delimited by the the lines :math:`y = 0`, :math:`x = 1`
+        and :math:`y = x`, that is, :math:`0.5`.
 
         >>> import skfda
         >>>
@@ -293,21 +297,21 @@ def inner_product(
 
         It also work with basis objects
 
-        >>> basis = skfda.representation.basis.Monomial(n_basis=3)
+        >>> basis = skfda.representation.basis.MonomialBasis(n_basis=3)
         >>>
         >>> fd1 = skfda.FDataBasis(basis, [0, 1, 0])
         >>> fd2 = skfda.FDataBasis(basis, [1, 0, 0])
         >>> inner_product(fd1, fd2)
         array([ 0.5])
 
-        >>> basis = skfda.representation.basis.Monomial(n_basis=3)
+        >>> basis = skfda.representation.basis.MonomialBasis(n_basis=3)
         >>>
         >>> fd1 = skfda.FDataBasis(basis, [[0, 1, 0], [0, 0, 1]])
         >>> fd2 = skfda.FDataBasis(basis, [1, 0, 0])
         >>> inner_product(fd1, fd2)
         array([ 0.5       , 0.33333333])
 
-        >>> basis = skfda.representation.basis.Monomial(n_basis=3)
+        >>> basis = skfda.representation.basis.MonomialBasis(n_basis=3)
         >>>
         >>> fd1 = skfda.FDataBasis(basis, [[0, 1, 0], [0, 0, 1]])
         >>> fd2 = skfda.FDataBasis(basis, [[1, 0, 0], [0, 1, 0]])
@@ -322,10 +326,15 @@ def inner_product(
             _matrix=_matrix,
             _domain_range=_domain_range,
         )
+    elif isinstance(arg1, np.ndarray) and isinstance(arg2, np.ndarray):
+        return (  # type: ignore[no-any-return]
+            np.einsum('n...,m...->nm...', arg1, arg2).sum(axis=-1)
+            if _matrix else (arg1 * arg2).sum(axis=-1)
+        )
 
-    return (
-        np.einsum('n...,m...->nm...', arg1, arg2).sum(axis=-1)
-        if _matrix else (arg1 * arg2).sum(axis=-1)
+    raise ValueError(
+        "Cannot compute inner product between "
+        f"{type(arg1)} and {type(arg2)}",
     )
 
 
@@ -355,11 +364,11 @@ def _inner_product_fdatagrid(
         # Perform quadrature inside the einsum
         for i, s in enumerate(arg1.grid_points[::-1]):
             identity = np.eye(len(s))
-            weights = scipy.integrate.simps(identity, x=s)
+            weights = scipy.integrate.simpson(identity, x=s)
             index = (slice(None),) + (np.newaxis,) * (i + 1)
             d1 *= weights[index]
 
-        return np.einsum(
+        return np.einsum(  # type: ignore[call-overload, no-any-return]
             d1,
             [0] + einsum_broadcast_list,
             d2,
@@ -367,16 +376,8 @@ def _inner_product_fdatagrid(
             [0, 1],
         )
 
-    integrand = d1 * d2
-
-    for g in arg1.grid_points[::-1]:
-        integrand = scipy.integrate.simps(
-            integrand,
-            x=g,
-            axis=-2,
-        )
-
-    return np.sum(integrand, axis=-1)
+    integrand = arg1 * arg2
+    return integrand.integrate().sum(axis=-1)  # type: ignore[no-any-return]
 
 
 @inner_product.register(FDataBasis, FDataBasis)
@@ -388,6 +389,7 @@ def _inner_product_fdatabasis(
     arg2: Union[FDataBasis, Basis],
     *,
     _matrix: bool = False,
+    _domain_range: Optional[DomainRange] = None,
     inner_product_matrix: Optional[NDArrayFloat] = None,
     force_numerical: bool = False,
 ) -> NDArrayFloat:
@@ -395,11 +397,16 @@ def _inner_product_fdatabasis(
     if not _same_domain(arg1, arg2):
         raise ValueError("Both Objects should have the same domain_range")
 
+    if _domain_range and not np.array_equal(arg1.domain_range, _domain_range):
+        raise ValueError("_domain_range should be the same as arg objects")
+
     if isinstance(arg1, Basis):
         arg1 = arg1.to_basis()
 
     if isinstance(arg2, Basis):
         arg2 = arg2.to_basis()
+
+    check_fdata_same_dimensions(arg1, arg2)
 
     # Now several cases where computing the matrix is preferrable
     #
@@ -431,14 +438,14 @@ def _inner_product_fdatabasis(
         coef2 = arg2.coefficients
 
         if _matrix:
-            return np.einsum(
+            return np.einsum(  # type: ignore[no-any-return]
                 'nb,bc,mc->nm',
                 coef1,
                 inner_product_matrix,
                 coef2,
             )
 
-        return (
+        return (  # type: ignore[no-any-return]
             coef1
             @ inner_product_matrix
             * coef2
@@ -448,8 +455,8 @@ def _inner_product_fdatabasis(
 
 
 def _inner_product_integrate(
-    arg1: Callable[[ArrayLike], NDArrayFloat],
-    arg2: Callable[[ArrayLike], NDArrayFloat],
+    arg1: Callable[[NDArrayFloat], NDArrayFloat],
+    arg2: Callable[[NDArrayFloat], NDArrayFloat],
     *,
     _matrix: bool = False,
     _domain_range: Optional[DomainRange] = None,
@@ -469,7 +476,7 @@ def _inner_product_integrate(
         len_arg2 = len(arg2)
     else:
         # If the arguments are callables, we need to pass the domain range
-        # explicitly. This is used internally for computing the gramian
+        # explicitly. This is used internally for computing the gram
         # matrix of operators.
         assert _domain_range is not None
         domain_range = _domain_range
@@ -478,12 +485,23 @@ def _inner_product_integrate(
         len_arg2 = len(arg2(left_domain))
 
     def integrand(*args: NDArrayFloat) -> NDArrayFloat:  # noqa: WPS430
-        f1 = arg1(args)[:, 0, :]
-        f2 = arg2(args)[:, 0, :]
+        f_args = np.asarray(args)
+
+        try:
+            f1 = arg1(f_args)[:, 0, :]
+        except Exception:
+            f1 = arg1(f_args)
+
+        try:
+            f2 = arg2(f_args)[:, 0, :]
+        except Exception:
+            f2 = arg2(f_args)
 
         if _matrix:
             ret = np.einsum('n...,m...->nm...', f1, f2)
-            return ret.reshape((-1,) + ret.shape[2:])
+            return ret.reshape(  # type: ignore[no-any-return]
+                (-1,) + ret.shape[2:],
+            )
 
         return f1 * f2
 
@@ -497,7 +515,7 @@ def _inner_product_integrate(
     if _matrix:
         summation = summation.reshape((len_arg1, len_arg2))
 
-    return summation
+    return summation  # type: ignore[no-any-return]
 
 
 def inner_product_matrix(
@@ -534,11 +552,6 @@ def inner_product_matrix(
 
 def _clip_cosine(array: NDArrayFloat) -> NDArrayFloat:
     """Clip cosine values to prevent numerical errors."""
-    small_val = 1e-6
-
-    # If the difference is too large, there could be a problem
-    assert np.all((-1 - small_val < array) & (array < 1 + small_val))
-
     return np.clip(array, -1, 1)
 
 
@@ -579,7 +592,7 @@ def cosine_similarity(
         >>> array1 = np.array([1, 2, 3])
         >>> array2 = np.array([4, 5, 6])
         >>> cosine_similarity(array1, array2)
-        0.9746318461970762
+        np.float64(0.9746318461970762)
 
         If the arrays contain more than one sample
 
@@ -588,7 +601,7 @@ def cosine_similarity(
         >>> cosine_similarity(array1, array2)
         array([ 0.97463185,  0.96490128])
 
-        The cosine similarity of the :math:'f(x) = x` and the constant
+        The cosine similarity of the :math:`f(x) = x` and the constant
         :math:`y=1` defined over the interval [0,1] is the area of the
         triangle delimited by the the lines y = 0, x = 1 and y = x; 0.5,
         multiplied by :math:`\sqrt{3}`.
@@ -619,21 +632,21 @@ def cosine_similarity(
 
         It also work with basis objects
 
-        >>> basis = skfda.representation.basis.Monomial(n_basis=3)
+        >>> basis = skfda.representation.basis.MonomialBasis(n_basis=3)
         >>>
         >>> fd1 = skfda.FDataBasis(basis, [0, 1, 0])
         >>> fd2 = skfda.FDataBasis(basis, [1, 0, 0])
         >>> cosine_similarity(fd1, fd2)
         array([ 0.8660254])
 
-        >>> basis = skfda.representation.basis.Monomial(n_basis=3)
+        >>> basis = skfda.representation.basis.MonomialBasis(n_basis=3)
         >>>
         >>> fd1 = skfda.FDataBasis(basis, [[0, 1, 0], [0, 0, 1]])
         >>> fd2 = skfda.FDataBasis(basis, [1, 0, 0])
         >>> cosine_similarity(fd1, fd2)
         array([ 0.8660254 ,  0.74535599])
 
-        >>> basis = skfda.representation.basis.Monomial(n_basis=3)
+        >>> basis = skfda.representation.basis.MonomialBasis(n_basis=3)
         >>>
         >>> fd1 = skfda.FDataBasis(basis, [[0, 1, 0], [0, 0, 1]])
         >>> fd2 = skfda.FDataBasis(basis, [[1, 0, 0], [0, 1, 0]])

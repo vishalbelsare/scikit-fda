@@ -10,17 +10,17 @@ import abc
 from typing import Any, Mapping, Optional
 
 import numpy as np
-from sklearn.base import BaseEstimator, TransformerMixin
 
-from ... import FDataGrid
 from ..._utils import _to_grid_points
-from ...representation._typing import GridPointsLike
+from ..._utils._sklearn_adapter import BaseEstimator, TransformerMixin
+from ...representation import FDataGrid
+from ...typing._base import GridPoints, GridPointsLike
+from ...typing._numpy import NDArrayFloat
 
 
 class _LinearSmoother(
-    abc.ABC,
-    BaseEstimator,  # type: ignore
-    TransformerMixin,  # type: ignore
+    TransformerMixin[FDataGrid, FDataGrid, object],
+    BaseEstimator,
 ):
     """Linear smoother.
 
@@ -28,6 +28,9 @@ class _LinearSmoother(
     ``hat_matrix`` to define the smoothing or 'hat' matrix.
 
     """
+
+    input_points_: GridPoints
+    output_points_: GridPoints
 
     def __init__(
         self,
@@ -40,7 +43,7 @@ class _LinearSmoother(
         self,
         input_points: Optional[GridPointsLike] = None,
         output_points: Optional[GridPointsLike] = None,
-    ) -> np.ndarray:
+    ) -> NDArrayFloat:
 
         # Use the fitted points if they are not provided
         if input_points is None:
@@ -58,7 +61,7 @@ class _LinearSmoother(
         self,
         input_points: GridPointsLike,
         output_points: GridPointsLike,
-    ) -> np.ndarray:
+    ) -> NDArrayFloat:
         pass
 
     def _more_tags(self) -> Mapping[str, Any]:
@@ -69,7 +72,7 @@ class _LinearSmoother(
     def fit(
         self,
         X: FDataGrid,
-        y: None = None,
+        y: object = None,
     ) -> _LinearSmoother:
         """Compute the hat matrix for the desired output points.
 
@@ -95,7 +98,7 @@ class _LinearSmoother(
     def transform(
         self,
         X: FDataGrid,
-        y: None = None,
+        y: object = None,
     ) -> FDataGrid:
         """Multiply the hat matrix with the function values to smooth them.
 
@@ -114,9 +117,25 @@ class _LinearSmoother(
             )
         )
 
+        dims = [len(e) for e in self.output_points_]
+        dims += [len(e) for e in self.input_points_]
+
+        hat_matrix = np.reshape(
+            self.hat_matrix_,
+            dims,
+        )
+
+        data_matrix = np.einsum(
+            hat_matrix,
+            [Ellipsis, *range(1, len(self.output_points_) + 1)],
+            X.data_matrix,
+            [0, *range(1, len(self.output_points_) + 2)],
+            [0, Ellipsis, len(self.output_points_) + 1],
+        )
+
         # The matrix is cached
         return X.copy(
-            data_matrix=self.hat_matrix_ @ X.data_matrix,
+            data_matrix=data_matrix,
             grid_points=self.output_points_,
         )
 

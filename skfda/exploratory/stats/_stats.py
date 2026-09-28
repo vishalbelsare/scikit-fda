@@ -1,80 +1,183 @@
 """Functional data descriptive statistics."""
+from __future__ import annotations
 
+import functools
 from builtins import isinstance
-from typing import Optional, TypeVar, Union
+from typing import Callable, TypeVar, Union
 
 import numpy as np
-from scipy import integrate
 from scipy.stats import rankdata
 
-from ...misc.metrics import Metric, l2_distance, l2_norm
-from ...representation import FData, FDataGrid
+from skfda._utils.ndfunction import average_function_value
+
+from ...misc.metrics._lp_distances import l2_distance
+from ...representation import FData, FDataBasis, FDataGrid, FDataIrregular
+from ...typing._metric import Metric
+from ...typing._numpy import NDArrayFloat
 from ..depth import Depth, ModifiedBandDepth
 
 F = TypeVar('F', bound=FData)
+T = TypeVar('T', bound=Union[NDArrayFloat, FData])
 
 
-def mean(X: F) -> F:
-    """Compute the mean of all the samples in a FData object.
+def mean(
+    X: F,
+    weights: NDArrayFloat | None = None,
+) -> F:
+    """
+    Compute the mean of all the samples in a FData object.
 
     Args:
         X: Object containing all the samples whose mean is wanted.
-
+        weights: Sample weight. By default, uniform weight are used.
 
     Returns:
-        A :term:`functional data object` with just one sample representing
-        the mean of all the samples in the original object.
+        Mean of all the samples in the original object, as a
+        :term:`functional data object` with just one sample.
 
     """
-    return X.mean()
+    if weights is None:
+        return X.mean()
+
+    weight = (1 / np.sum(weights)) * weights
+    return (X * weight).sum()
 
 
-def var(X: FData) -> FDataGrid:
-    """Compute the variance of a set of samples in a FDataGrid object.
+def var(X: FData, correction: int = 0) -> FDataGrid:
+    """
+    Compute the variance of a set of samples in a FData object.
 
     Args:
         X: Object containing all the set of samples whose variance is desired.
+        correction: degrees of freedom adjustment. The divisor used in the
+            calculation is `N - correction`, where `N` represents the number of
+            elements. Default: `0`.
 
     Returns:
-        A :term:`functional data object` with just one sample representing the
-        variance of all the samples in the original object.
+        Variance of all the samples in the original object, as a
+        :term:`functional data object` with just one sample.
 
     """
-    return X.var()
+    return X.var(correction=correction)  # type: ignore[no-any-return]
 
 
 def gmean(X: FDataGrid) -> FDataGrid:
-    """Compute the geometric mean of all the samples in a FDataGrid object.
+    """
+    Compute the geometric mean of all the samples in a FDataGrid object.
 
     Args:
         X: Object containing all the samples whose geometric mean is wanted.
 
     Returns:
-        A :term:`functional data object` with just one sample representing the
-        geometric mean of all the samples in the original object.
+        Geometric mean of all the samples in the original object, as a
+        :term:`functional data object` with just one sample.
 
     """
     return X.gmean()
 
 
-def cov(X: FData) -> FDataGrid:
-    """Compute the covariance.
+def cov(
+    X: FData,
+    correction: int = 0,
+) -> Callable[[NDArrayFloat, NDArrayFloat], NDArrayFloat]:
+    """
+    Compute the covariance.
 
     Calculates the covariance matrix representing the covariance of the
     functional samples at the observation points.
 
     Args:
         X: Object containing different samples of a functional variable.
+        correction: degrees of freedom adjustment. The divisor used in the
+            calculation is `N - correction`, where `N` represents the number of
+            elements. Default: `0`.
+
 
     Returns:
-        A :term:`functional data object` with just one sample representing the
-        covariance of all the samples in the original object.
+        Covariance of all the samples in the original object, as a
+        callable.
 
     """
-    return X.cov()
+    return X.cov(correction=correction)
 
 
-def modified_epigraph_index(X: FDataGrid) -> np.ndarray:
+@functools.singledispatch
+def std(X: F, correction: int = 0) -> F:
+    r"""
+    Compute the standard deviation of all the samples in a FData object.
+
+    .. math::
+        \text{std}_X(t) = \sqrt{\frac{1}{N-\text{correction}}
+        \sum_{n=1}^{N}{\left(X_n(t) - \overline{X}(t)\right)^2}}
+
+    Args:
+        X: Object containing all the samples whose standard deviation is
+            wanted.
+        correction: degrees of freedom adjustment. The divisor used in the
+            calculation is `N - correction`, where `N` represents the number of
+            elements. Default: `0`.
+
+    Returns:
+        Standard deviation of all the samples in the original object, as a
+        :term:`functional data object` with just one sample.
+
+    """
+    raise NotImplementedError("Not implemented for this type")
+
+
+@std.register
+def std_fdatagrid(X: FDataGrid, correction: int = 0) -> FDataGrid:
+    """Compute the standard deviation of a FDataGrid."""
+    return X.copy(
+        data_matrix=np.std(
+            X.data_matrix, axis=0, ddof=correction,
+        )[np.newaxis, ...],
+        sample_names=(None,),
+    )
+
+
+@std.register
+def std_fdatairregular(
+    X: FDataIrregular, correction: int = 0,
+) -> FDataIrregular:
+    """Compute the standard deviation of a FDataIrregular."""
+    common_points, common_values = X._get_common_points_and_values()
+    std_values = np.std(
+        common_values, axis=0, ddof=correction,
+    )
+
+    return FDataIrregular(
+        start_indices=np.array([0]),
+        points=common_points,
+        values=std_values,
+        sample_names=(None,),
+    )
+
+
+@std.register
+def std_fdatabasis(X: FDataBasis, correction: int = 0) -> FDataBasis:
+    """Compute the standard deviation of a FDataBasis."""
+    from ..._utils import function_to_fdatabasis
+
+    basis = X.basis
+    coeff_cov_matrix = np.cov(
+        X.coefficients, rowvar=False, ddof=correction,
+    ).reshape((basis.n_basis, basis.n_basis))
+
+    def std_function(t_points: NDArrayFloat) -> NDArrayFloat:  # noqa: WPS430
+        basis_evaluation = basis(t_points).reshape((basis.n_basis, -1))
+        std_values = np.sqrt(
+            np.sum(
+                basis_evaluation * (coeff_cov_matrix @ basis_evaluation),
+                axis=0,
+            ),
+        )
+        return np.reshape(std_values, (1, -1, X.dim_codomain))
+
+    return function_to_fdatabasis(f=std_function, new_basis=X.basis)
+
+
+def modified_epigraph_index(X: FDataGrid) -> NDArrayFloat:
     """
     Calculate the Modified Epigraph Index of a FDataGrid.
 
@@ -83,40 +186,28 @@ def modified_epigraph_index(X: FDataGrid) -> np.ndarray:
     with all the other curves of our dataset.
 
     """
-    interval_len = (
-        X.domain_range[0][1]
-        - X.domain_range[0][0]
+    # Functions containing at each point the number of curves
+    # are above it.
+    num_functions_above = X.copy(
+        data_matrix=rankdata(
+            -X.data_matrix,
+            method='max',
+            axis=0,
+        ) - 1,
     )
 
-    # Array containing at each point the number of curves
-    # are above it.
-    num_functions_above = rankdata(
-        -X.data_matrix,
-        method='max',
-        axis=0,
-    ) - 1
-
-    integrand = num_functions_above
-
-    for d, s in zip(X.domain_range, X.grid_points):
-        integrand = integrate.simps(
-            integrand,
-            x=s,
-            axis=1,
-        )
-        interval_len = d[1] - d[0]
-        integrand /= interval_len
-
-    integrand /= X.n_samples
-
-    return integrand.flatten()
+    return (
+        average_function_value(num_functions_above)
+        / num_functions_above.n_samples
+    ).ravel()
 
 
 def depth_based_median(
-    X: FDataGrid,
-    depth_method: Optional[Depth] = None,
-) -> FDataGrid:
-    """Compute the median based on a depth measure.
+    X: T,
+    depth_method: Depth[T] | None = None,
+) -> T:
+    """
+    Compute the median based on a depth measure.
 
     The depth based median is the deepest curve given a certain
     depth measure.
@@ -124,7 +215,7 @@ def depth_based_median(
     Args:
         X: Object containing different samples of a
             functional variable.
-        depth_method: Method used to order the data. Defaults to
+        depth_method: Depth method used to order the data. Defaults to
             :func:`modified band
             depth <skfda.exploratory.depth.ModifiedBandDepth>`.
 
@@ -135,26 +226,27 @@ def depth_based_median(
         :func:`geometric_median`
 
     """
-    if depth_method is None:
-        depth_method = ModifiedBandDepth()
+    depth_method_used: Depth[T]
 
-    depth = depth_method(X)
+    if depth_method is None:
+        assert isinstance(X, FDataGrid)
+        depth_method_used = ModifiedBandDepth()
+    else:
+        depth_method_used = depth_method
+
+    depth = depth_method_used(X)
     indices_descending_depth = (-depth).argsort(axis=0)
 
     # The median is the deepest curve
     return X[indices_descending_depth[0]]
 
 
-T = TypeVar('T', bound=Union[np.ndarray, FData])
+def _weighted_average(X: T, weights: NDArrayFloat) -> T:
 
+    if isinstance(X, FData):
+        return (X * weights).sum()
 
-def _weighted_average(X: T, weights: np.ndarray) -> T:
-
-    return (
-        (X * weights).sum() if isinstance(X, FData)
-        # To support also multivariate data
-        else (X.T * weights).T.sum(axis=0)
-    )
+    return (X.T * weights).T.sum(axis=0)  # type: ignore[no-any-return]
 
 
 def geometric_median(
@@ -163,7 +255,8 @@ def geometric_median(
     tol: float = 1.e-8,
     metric: Metric[T] = l2_distance,
 ) -> T:
-    r"""Compute the geometric median.
+    r"""
+    Compute the geometric median.
 
     The sample geometric median is the point that minimizes the :math:`L_1`
     norm of the vector of distances to all observations:
@@ -173,7 +266,10 @@ def geometric_median(
         \underset{y \in L(\mathcal{T})}{\arg \min}
         \sum_{i=1}^N \left \| x_i-y \right \|
 
-    It uses the corrected Weiszfeld algorithm to compute the median.
+    The geometric median in the functional case is also described in
+    :footcite:`gervini_2008_robust`.
+    Instead of the proposed algorithm, however, the current implementation
+    uses the corrected Weiszfeld algorithm to compute the median.
 
     Args:
         X: Object containing different samples of a
@@ -200,8 +296,6 @@ def geometric_median(
     References:
         .. footbibliography::
 
-            gervini_2008_estimation
-
     """
     weights = np.full(len(X), 1 / len(X))
     median = _weighted_average(X, weights)
@@ -217,7 +311,7 @@ def geometric_median(
 
         median_new = _weighted_average(X, weights_new)
 
-        if l2_norm(median_new - median) < tol:
+        if l2_distance(median_new, median) < tol:
             return median_new
 
         distances = metric(X, median_new)
@@ -229,7 +323,7 @@ def trim_mean(
     X: F,
     proportiontocut: float,
     *,
-    depth_method: Optional[Depth[F]] = None,
+    depth_method: Depth[F] | None = None,
 ) -> FDataGrid:
     """Compute the trimmed means based on a depth measure.
 

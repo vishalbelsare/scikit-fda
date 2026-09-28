@@ -10,9 +10,10 @@ from typing import Any, Callable, Optional, Sequence, Union
 import numpy as np
 
 from ...representation import FData, FDataGrid
-from ...representation._typing import ArrayLike, GridPointsLike, NDArrayFloat
 from ...representation.extrapolation import ExtrapolationLike
 from ...representation.interpolation import SplineInterpolation
+from ...typing._base import GridPointsLike
+from ...typing._numpy import ArrayLike, NDArrayFloat
 
 _FixedLocation = Union[float, Sequence[float]]
 _LocationCallable = Callable[[np.ndarray], _FixedLocation]
@@ -42,9 +43,8 @@ def landmark_shift_deltas(
             passed the location will be the result of the the call, the
             function should be accept as an unique parameter a numpy array
             with the list of landmarks.
-            By default it will be used as location :math:`\frac{1}{2}(max(
-            \text{landmarks})+ min(\text{landmarks}))` wich minimizes the
-            max shift.
+            By default it will be used as location the mean of the original
+            locations of the landmarks.
 
     Returns:
         Array containing the corresponding shifts.
@@ -68,7 +68,7 @@ def landmark_shift_deltas(
 
         >>> shifts = landmark_shift_deltas(fd, landmarks)
         >>> shifts.round(3)
-        array([ 0.25 , -0.25 , -0.231])
+        array([ 0.327, -0.173, -0.154])
 
         The registered samples can be obtained with a shift
 
@@ -88,10 +88,7 @@ def landmark_shift_deltas(
 
     # Parses location
     if location is None:
-        loc_array = (
-            np.max(landmarks, axis=0)
-            + np.min(landmarks, axis=0)
-        ) / 2
+        loc_array = np.mean(landmarks)
     elif callable(location):
         loc_array = location(landmarks)
     else:
@@ -198,7 +195,7 @@ def landmark_elastic_registration_warping(
     location: Optional[ArrayLike] = None,
     grid_points: Optional[GridPointsLike] = None,
 ) -> FDataGrid:
-    """Calculate the transformation used in landmark registration.
+    r"""Calculate the transformation used in landmark registration.
 
         Let :math:`t_{ij}` the time where the sample :math:`i` has the feature
         :math:`j` and :math:`t^*_j` the new time for the feature. The warping
@@ -206,7 +203,7 @@ def landmark_elastic_registration_warping(
         :math:`h_i(t^*_j)=t_{ij}`.
         The registered samples can be obtained as :math:`x^*_i(t)=x_i(h_i(t))`.
 
-        See :footcite:`ramsay+silverman_2005_functional_landmark`
+        See Ramsay and Silverman (chapter 7)\ :footcite:`ramsay+silverman_2005`
         for a detailed explanation.
 
     Args:
@@ -339,7 +336,7 @@ def landmark_elastic_registration(
     location: Optional[ArrayLike] = None,
     grid_points: Optional[GridPointsLike] = None,
 ) -> FDataGrid:
-    """
+    r"""
     Perform landmark registration of the curves.
 
     Let :math:`t_{ij}` the time where the sample :math:`i` has the feature
@@ -347,7 +344,7 @@ def landmark_elastic_registration(
     The registered samples will have their features aligned, i.e.,
     :math:`x^*_i(t^*_j)=x_i(t_{ij})`.
 
-    See :footcite:`ramsay+silverman_2005_functional_landmark`
+    See Ramsay and Silverman (chapter7)\ :footcite:`ramsay+silverman_2005`
     for a detailed explanation.
 
     Args:
@@ -374,7 +371,7 @@ def landmark_elastic_registration(
         >>> from skfda.preprocessing.registration import (
         ...     landmark_elastic_registration,
         ... )
-        >>> from skfda.representation.basis import BSpline
+        >>> from skfda.representation.basis import BSplineBasis
 
         We will create a data with landmarks as example
 
@@ -391,7 +388,7 @@ def landmark_elastic_registration(
 
         This method will work for FDataBasis as for FDataGrids
 
-        >>> fd = fd.to_basis(BSpline(n_basis=12))
+        >>> fd = fd.to_basis(BSplineBasis(n_basis=12))
         >>> landmark_elastic_registration(fd, landmarks)
         FDataGrid(...)
 
